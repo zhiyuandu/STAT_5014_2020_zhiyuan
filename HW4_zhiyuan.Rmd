@@ -1,0 +1,471 @@
+---
+title: "HW4_zhiyuan"
+author: "Zhiyuan Du"
+date: "10/6/2020"
+output: 
+   pdf_document:
+    fig_caption: yes
+    extra_dependencies: ["float"]
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE,message=FALSE,fig.pos = "H",tidy = TRUE,tidy.opts=list(arrow=TRUE, indent=2))
+library(formatR)
+library(doParallel)
+library(foreach)
+library(doSNOW)
+library(Matrix)
+library(knitr)
+library(downloader)
+library(data.table)
+library(microbenchmark)
+library(ggplot2)
+library(mapproj)
+```
+
+# Problem 2
+
+The algorithm is called Gradient Descent. We can write a fcunction about based on a while loop to approximate the parameters. Then we compare the results with lm(h~0+X).
+
+```{r echo=TRUE,include=TRUE }
+#define start values
+set.seed(1256)
+theta = as.matrix(c(1,2),nrow=2)
+X = cbind(1,rep(1:10,10))
+h = X %*% theta+rnorm(100,0,0.2)
+
+#write a function named 'GD' with step size and tolerance input
+GD=function(theta, alpha, tolerance){
+  
+#define the values
+theta0_i1=0
+theta1_i1=0
+theta0_i=1
+theta1_i=2
+n=0
+
+#while loop stop stop when less than the tolerance
+while (abs(theta0_i-theta0_i1)>tolerance && abs(theta1_i-theta1_i1)>tolerance) {
+   theta0_i1=theta0_i
+   theta1_i1=theta1_i
+   theta0_i=theta0_i1-alpha*(1/100)*sum(X%*%matrix(c(theta0_i1,theta1_i1),nrow=2)- h)
+   theta1_i=theta1_i1-alpha*(1/100)*(t(X%*%matrix(c(theta0_i1,theta1_i1),nrow=2)- h)%*%X[,2])
+   n=n+1
+}
+
+#return the results
+results=cbind(theta0_i,theta1_i,n)
+colnames(results)=c("theta_0","theta_1","iteration")
+return(results)
+
+}
+
+GD(theta, 0.01,1e-7)
+
+
+lm(h ~ 0+X)
+
+
+```
+Here, we used tolerance step size as 0.01 and tolerance as 1e-6, the results we got about theta0 and theta1 are close to the codfficients we got by lm(h~0+X), which means our approximation by Gradient Descent was successful.  
+
+# Problem 3
+
+a. In this question, we are doing the Gradient Descent for 10000 different combinations of beta0 and beta1. The true beta0 and beta1 is 1 and 2, here, we get 100 start values for beta0 in (0,2) and (1,3). Then we do the Gradient Descent for the 10000 different combinations of beta0 and beta1.
+```{r echo=TRUE, include=TRUE}
+
+theta0_start <- seq(0, 2, length.out = 100)
+theta1_start <- seq(1, 3, length.out = 100)
+theta_start=rbind(rep(theta0_start,1,each=100),rep(theta1_start,100))
+
+cores=detectCores()-1
+cluster = makeCluster(cores, type = "SOCK")
+registerDoSNOW(cluster)
+clusterExport(cluster, c("X","h"))
+system.time({final_results=foreach(n = 1:10000, .combine = rbind) %dopar% GD(theta_start[,n],alpha=1e-7,tolerance = 1e-9)})
+stopCluster(cluster)
+kable(final_results[1:10, ], caption = "first 10 values")
+min(final_results[,3])
+max(final_results[,3])
+mean(final_results[,1])
+mean(final_results[,2])
+sd(final_results[,1])
+sd(final_results[,2])
+```
+
+b. The stop rulr for this problem is not good which takes too much time. We can try try different tolerance. However, it is tough to make the right decision about the stop rule for that large tolerance may not make the loop converge to the true value, the small tolerance takes too much time. 
+
+c. This algorithm is not ideal based on the situation that we have no idea about the range of the starting value, wrong starting values may not converge to the true value. Also, the stepping size and the tolerance are hard to decide too.  
+
+# Problem 4
+
+John Cook suggests that instead of solving for the inverse of $(X^TX)^{-1}$ we use the solve function to find $\hat{\beta}$ by solving the following system $(X^TX)\hat{\beta}=X^T\underline{y}$.  This will save unnecessary computation of $(X^TX)^{-1}$ since the goal is to really find $\hat{\beta}$.
+
+# Problem 5
+
+a. 
+```{r echo=TRUE, include=TRUE}
+
+set.seed(12456)
+G <- matrix(sample(c(0,0.5,1),size=16000,replace=T),ncol=10)
+R <- cor(G) # R: 10 * 10 correlation matrix of G
+C <- kronecker(R, diag(1600)) # C is a 16000 * 16000 block diagonal matrix
+id <- sample(1:16000,size=932,replace=F)
+q <- sample(c(0,0.5,1),size=15068,replace=T) # vector of length 15068
+A <- C[id, -id] # matrix of dimension 932 * 15068
+B <- C[-id, -id] # matrix of dimension 15068 * 15068
+p <- runif(932,0,1)
+r <- runif(15068,0,1)
+C<-NULL #save some memory space
+
+```
+
+```{r echo=TRUE,include=TRUE}
+
+object.size(A)
+object.size(B)
+system.time({y=p+A%*%solve(B)%*%(q-r)})
+cat("the size of A is", object.size(A))
+cat("the size of B is", object.size(B))
+print(system.time({y=p+A%*%solve(B)%*%(q-r)}))
+```
+From the results, the size of A is 112347224 bytes(107.1 Mb) and the size of B is 1816357208 bytes(1.7 Gb). The time used on computation is 881.27 seconds.  
+
+b. The most time consuming part in the compution is A times the inverse of B. I would do this firstly, and then multiply it with (q-r), finally sum it with p. In R, we can convert the matrix into sparse matrix which will save the time on computing.  
+
+c. Let's do this and calculate the time used.  
+
+```{r echo=TRUE, include=TRUE}
+
+time=system.time({
+  Anew <- as(A, "sparseMatrix")
+  Bnew <- as(B, "sparseMatrix")
+  s <- q - r
+  D <- solve(Bnew, s)
+  y <- p + Anew %*% D
+})
+
+time
+```
+the time after the simplifications is only 0.52 seconds.  
+
+# Problem 6
+
+a. Let's denote the sample space of this event as {s,f,s,s,f,f...}, where "s" is success and "f" is failing, then the proportion of success is the number of "s" over the number of samples in sample space. 
+```{r echo=TRUE, include=TRUE}
+
+data1=c(1,1,1,1,1,0,0,0,0,0)
+pro_success=function(data){
+   sum(data !=0)/length(data)
+}
+pro_success(data1)
+```
+
+b. Just type the data.
+```{r echo=TRUE,include=TRUE}
+
+set.seed(12345)
+P6b_data <- matrix(rbinom(10, 1, prob = (31:40)/100), nrow = 10, ncol = 10, byrow = FALSE)
+```
+
+c. Run the code.
+```{r echo=TRUE,include=TRUE}
+
+apply(P6b_data, 1, pro_success)
+apply(P6b_data, 2, pro_success)
+```
+From the results, the propoertions by row are all 1 and 0 and the proportion by column are all same as 0.6. So the matrix is not random at all.  
+
+d. Fix the code to meke it random.
+```{r echo=TRUE,include=TRUE}
+
+set.seed(12345)
+p6d= function(p){
+   rbinom(10,1,p)
+}
+# use the apply function to fix
+P6d_data=sapply(seq(0.31,0.4,by=0.01), p6d)
+apply(P6d_data, 1, pro_success)
+apply(P6d_data, 2, pro_success)
+
+```
+From the results, we used sapply function to create a function by which a random matrix could be created. The proportions of success of the matrix we created are different by both row and column.  
+
+# Problem 7  
+
+Firstly, let's import the data.  
+```{r echo=FALSE,include=FALSE}
+# import the data
+data5=readRDS("D:/VT/Rstudio/directory/data5.rds")
+colnames(data5)=c("Observer","x","y")
+```
+
+Then, let's create the function and make the plots.
+```{r echo=TRUE,include=TRUE}
+# the function make the plot
+sc_plot=function(data5,title,xlable,ylable){
+   plot(data5$x,data5$y,main=title, xlab=xlable,ylab = ylable)}
+sc_plot(data5,"device measurements", "dev1","dev2")
+
+# the plots for 13 observers.
+lapply(1:13, function(n){sc_plot(data5[data5$Observer==n,],"observer measurement","dev1","dev2")})
+```
+
+# Problem 8
+a. Let's load the data.  
+```{r echo=TRUE, include=FALSE}
+# download the files, looks like it is a .zip
+download("http://www.farinspace.com/wp-content/uploads/us_cities_and_states.zip", dest="us_cities_states.unzip")
+unzip("us_cities_states.unzip", exdir = "D:/VT/Rstudio/directory")
+
+# make the dataframe for states and cities
+states <- fread(input = "D:/VT/Rstudio/directory/us_cities_and_states/states.sql",skip = 23,sep = "'", sep2 = ",", header = F, select = c(2,4))
+cities <- fread(input = "D:/VT/Rstudio/directory/us_cities_and_states/cities_extended.sql",skip = 26,sep = "'", 
+                    sep2 = ",", header = F, select = c(2,4,6,8,10,12))
+colnames(cities) = c("City", "State_Code", "Zip", "Latitude", "Longitude", "County")
+```
+
+b. let's create a summary table of the number of cities included by state. 
+```{r echo=TRUE, include=TRUE}
+
+city_count=table(cities$State_Code)
+
+```
+
+c. Create a dunction to count the letter.
+```{r echo=TRUE,include=TRUE}
+
+getCount <- function(state_name, letter){
+temp <- unlist(strsplit(tolower(state_name),split=""))
+count=0
+for (i in 1: length(temp)){
+   if(temp[i]==letter) {
+      count=count+1
+   }
+}
+return(count)
+}
+
+
+letter_count <- data.frame(matrix(NA,nrow=51, ncol=26))
+letter_count_results=for(i in 1:51){
+letter_count[i,] <- sapply(1:26,function(n){getCount(states$V2[i],letters[n])})
+}
+
+```
+
+d. Let's meke two maps for U.S.
+```{r echo=TRUE,include=TRUE}
+
+load("D:/VT/Rstudio/directory/fifty_states.rda")
+
+# map1
+city_count1=data.frame(state = tolower(rownames(city_count)), city_count)
+city_count2=as.data.frame(cbind(tolower(states$V2),city_count1[-40,]$Freq))
+colnames(city_count2)=c("state","count")
+
+# map_id creates the aesthetic mapping to the state name column in your data
+map1= ggplot(city_count2, aes(map_id = state)) +
+# map points to the fifty_states shape data
+geom_map(aes(fill = count), map = fifty_states) +
+expand_limits(x = fifty_states$long, y = fifty_states$lat) +
+coord_map() +
+scale_x_continuous(breaks = NULL) +
+scale_y_continuous(breaks = NULL) +
+labs(x = "", y = "") +
+theme(legend.position = "bottom",
+panel.background = element_blank())
+map1
+
+# map2
+state_letter=data.frame(state=tolower(states$V2),rowSums(letter_count>3))
+colnames(state_letter)=c("state","count")
+
+map2= ggplot(state_letter, aes(map_id = state)) +
+# map points to the fifty_states shape data
+geom_map(aes(fill = count), map = fifty_states) +
+expand_limits(x = fifty_states$long, y = fifty_states$lat) +
+coord_map() +
+scale_x_continuous(breaks = NULL) +
+scale_y_continuous(breaks = NULL) +
+labs(x = "", y = "") +
+theme(legend.position = "bottom",
+panel.background = element_blank())
+map2
+
+```
+
+# Problem 9
+
+a. Let's try to run that code and find the errors.
+```{r echo=TRUE,include=TRUE,warning=FALSE,message=FALSE}
+
+library(quantreg)
+library(quantmod)
+#AAPL prices
+apple08 <- getSymbols('AAPL', auto.assign = FALSE, from = '2008-1-1', to = 
+"2008-12-31")[,6]
+#market proxy
+rm08<-getSymbols('^ixic', auto.assign = FALSE, from = '2008-1-1', to = 
+"2008-12-31")[,6]
+
+#log returns of AAPL and market
+logapple08<- na.omit(ROC(apple08)*100)
+logrm08<-na.omit(ROC(rm08)*100)
+
+#OLS for beta estimation
+beta_AAPL_08<-summary(lm(logapple08~logrm08))$coefficients[2,1]
+
+#create df from AAPL returns and market returns
+df08<-cbind(logapple08,logrm08)
+set.seed(666)
+Boot=1000
+sd.boot=rep(0,Boot)
+for(i in 1:Boot){
+# nonparametric bootstrap
+bootdata=df08[sample(nrow(df08), size = 251, replace = TRUE),]
+sd.boot[i]= coef(summary(lm(AAPL.Adjusted~IXIC.Adjusted, data = bootdata)))[2,2]
+}
+head(sd.boot)
+summary(df08)
+```
+After running and reading the errors we found two problems:
+1. The author mistyped the "Boot" as "Boot_times".
+2. "logapple08" and "logrm08" are not the variable names of "df08". He should checked the names of those two variables.
+3. When sampling, there is no need to use argument: "replace=TRUE". 
+
+b. First, let's import the data and clean it.
+```{r echo=TRUE,include=TRUE,warning=FALSE,message=FALSE}
+
+sensory_raw=readRDS("D:/VT/Rstudio/directory/operator_data_raw.RDS")
+
+# use the for circle to fill the NA values and correct the item number.
+for(i in 2:length(sensory_raw$V6))
+  {
+  if(is.na(sensory_raw$V6[i])){sensory_raw$V6[i]=sensory_raw$V1[i] 
+                                     sensory_raw$V1[i]=sensory_raw$V1[i-1]}
+}
+sensory=sensory_raw[-1,]
+sensory=data.frame(sensory$V1,operator=as.character(rep(c(1,2,3,4,5),2)),
+                                 sapply(stack(sensory[,-1]),as.numeric))
+sensory=sensory[,-4]
+colnames(sensory)=c("item","operator","values")
+```
+
+Now lets's bootstrap the analysis to get the parameter estimates using 100 bootstrapped samples.
+```{r echo=TRUE,include=TRUE}
+
+#system time
+time1=system.time({
+set.seed(4578)
+beta.boot=matrix(NA,nrow = 100,ncol=2)
+for (j in 1:100) {
+   
+boot_data=matrix(NA,nrow = 75,ncol = 2)
+for (i in 1:5){
+   boot_data[((i-1)*15+1): (15*i), ]=as.matrix(sensory[sensory$operator==i,] [sample(c(1:30),15,FALSE),2:3])
+}
+
+#nonparametric bootstrap
+boot_data=data.frame(sapply(boot_data[,1], as.numeric),boot_data[,2])
+colnames(boot_data)=c("operator","values")
+beta.boot[j,]= lm(values~operator, data = boot_data)$coefficients
+}
+})
+
+#The coefficients
+kable(beta.boot[1:10, ], caption = "first 10 coefficients' value")
+```
+
+c. Do the bootstraps in parallel and count the time. 
+```{r echo=TRUE,include=TRUE,warning=FALSE}
+
+#do in parallel
+
+cluster = makeCluster(4, type = "SOCK")
+registerDoSNOW(cluster)
+
+# write the bootstrap into a function
+time2=system.time({
+bootstrap=function(a){
+beta.boot=matrix(NA,nrow = 1,ncol=2)   
+boot_data=matrix(NA,nrow = 75,ncol = 2)
+for (i in 1:5){
+   boot_data[((i-1)*15+1): (15*i), ]=as.matrix(sensory[sensory$operator==i,] [sample(c(1:30),15,FALSE),2:3])
+}
+
+#nonparametric bootstrap
+boot_data=data.frame(sapply(boot_data[,1], as.numeric),boot_data[,2])
+colnames(boot_data)=c("operator","values")
+beta.boot= lm(values~operator, data = boot_data)$coefficients
+return(beta.boot)
+}
+
+
+results=foreach(n=1:100, .combine= rbind)%dopar% bootstrap(n)})
+
+stopCluster(cluster)
+kable(results[1:10, ], caption = "first 10 coefficients' value")
+kable(rbind(time1,time2))
+```
+Now we reran the bootstraps in parallel and created a table comparing the time used in partb and partc, the system tiem used is less than when doing not in parallel. 
+
+# Problem 10
+
+a. Do the bootstraps based on Newton's method to get the roots.  
+```{r echo=TRUE, include=TRUE}
+# the vector covering all of the roots with lenth as 1000
+X= seq(-2, -22, length.out = 1000)
+
+# Define the f(x)
+fun1=function(x) 3^x-sin(x)+cos(5*x)
+
+# The derivative of f(X)
+fun_de=function(x) 3^x*log(3)-cos(x)-5*sin(5*x)
+# Define the solution
+solution= function(x1){
+  
+  # Define the matrix with NA values firstly
+  n=2
+  x=matrix(NA,nrow=5000, ncol=4)
+  x0=matrix(c(1,2,3,4,1,2,4,3),nrow=2,byrow = TRUE)
+  x=rbind(x0,x)
+  x_n=pi
+  # When there is few difference between the X_n and X_n-1, 
+  # it means x converges, x_n is the solution.
+  while(abs(x[n,3]-x[n-1,3])>0.000001){
+   x_n=x1-fun1(x1)/fun_de(x1)
+   n=n+1
+   x[n,]=c(n,x1,x_n,fun1(x_n))
+   x1=x_n
+   }
+  x_solutions=as.data.frame(cbind(seq(1,4998,1),x[3:5000,]))[1:(n-2), -2]
+  colnames(x_solutions)=c("iterations","x_n-1","x_n","f(x)")
+  
+return(x_n)
+
+}
+root=unique(sapply(1:1000, function(n){solution(X[n])}))
+time3=system.time({unique(sapply(1:1000, function(n){solution(X[n])}))})
+kable(root[1:10 ], caption = "first 10 roots")
+time3
+```
+
+b. Do in parallel.  
+```{r echo=TRUE, include=TRUE,warning=FALSE}
+
+cores = 8
+cl = makeCluster(cores)
+clusterExport(cl=cl, c("fun1", "fun_de", "solution"), envir=environment())
+time4=system.time({parSapply(cl,X, solution)})
+stopCluster(cl)
+kable(rbind(time3,time4))
+```
+Now we reran the bootstraps in parallel and created a table comparing the time used in part a and part b, the system tiem used is less than when doing not in parallel. 
+ 
+
+
